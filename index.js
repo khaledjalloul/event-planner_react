@@ -14,148 +14,116 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 const port = process.env.PORT || 3737;
 
-let mongoClient;
+let EventSchema, Event;
 
 app.listen(port, async () => {
-    mongoClient = new MongoClient();
-    await mongoClient.start()
+    await mongoose.connect('mongodb+srv://khaledjalloul:Kj542533@cluster0.qpcmz.mongodb.net/eventPlanner?retryWrites=true&w=majority');
+
+    EventSchema = new mongoose.Schema({
+        title: String,
+        eventLocation: String,
+        dateTime: Date,
+        image: String,
+        attendees: [{ username: String, id: String }],
+        creatorID: String,
+        description: String,
+        items: [{ name: String, available: Boolean }]
+    }, { collection: 'events' });
+    Event = mongoose.model('Event', EventSchema);
+
     console.log("Event Planner ExpressJS API running on port " + port + ".");
 })
 
 app.get("/getEvents/:userID", async (req, res) => {
-    res.json(await mongoClient.getEvents(req.params.userID).catch(e => console.error(e)))
+    try {
+        const events = await Event.find({})
+        const userEvents = events.filter(event => event.attendees.some(attendee => attendee.id === req.params.userID))
+        res.status(200).json({ events: userEvents })
+    } catch (e) {
+        console.error(e)
+        res.status(404).json("User not found.")
+    }
 })
 
 app.get("/getEvent/:id", async (req, res) => {
-    res.json(await mongoClient.getEvent(req.params.id).catch(e => console.error(e)))
+    try {
+        const doc = await Event.findById(mongoose.Types.ObjectId(req.params.id))
+        if (doc) res.status(200).json({ event: doc })
+        else return res.status(404).json("Event not found.")
+    } catch (e) {
+        if (e instanceof TypeError) res.status(400).json('Invalid event ID.')
+        else { console.error(e); res.status(404).json("Event not found.") }
+    }
 })
 
 app.patch("/attendEvent/:id", async (req, res) => {
-    res.json(await mongoClient.attendEvent(req.params.id, req.body.username, req.body.userID).catch(e => console.error(e)))
+    try {
+        const doc = await Event.findById(req.params.id)
+        doc.attendees.push({ username: req.body.username, id: req.body.userID })
+        doc.save().then(savedDoc => {
+            if (savedDoc === doc) {
+                console.log("Updated users of document " + req.params.id)
+                res.status(200).json({ attendees: doc.attendees })
+            } else res.status(500).json("Server error occurred.")
+        })
+    } catch (e) { console.error(e); res.status(404).json("Event not found.") }
 })
 
 app.patch("/unAttendEvent/:id", async (req, res) => {
-    res.json(await mongoClient.unAttendEvent(req.params.id, req.body.userID).catch(e => console.error(e)))
+    try {
+        const doc = await Event.findById(req.params.id)
+        doc.attendees = doc.attendees.filter(attendee => attendee.id !== req.body.userID)
+        doc.save().then(savedDoc => {
+            if (savedDoc === doc) {
+                console.log("Updated users of document " + req.params.id)
+                res.status(200).json({ attendees: doc.attendees })
+            } else res.status(500).json("Server error occurred.")
+        })
+    } catch (e) { console.error(e); res.status(404).json("Event not found.") }
 })
 
 app.patch("/checkItem/:id", async (req, res) => {
-    res.json(await mongoClient.checkItem(req.params.id, req.body.item, req.body.available).catch(e => console.error(e)))
+    try {
+        const doc = await Event.findOne({ _id: req.params.id })
+        doc.items.map(item => {
+            if (item.name === req.body.item) {
+                item.available = req.body.available;
+                return item
+            } else return item
+        })
+        doc.save().then(savedDoc => {
+            if (savedDoc === doc) {
+                console.log("Updated items of document " + id)
+                res.status(200).json({ items: doc.items })
+            } else res.status(500).json("Server error occurred.")
+        })
+    } catch (e) { console.error(e); res.status(404).json("Event not found.") }
 })
 
 app.post("/createEvent", async (req, res) => {
-    res.json(await mongoClient.createEvent(req.body.title, req.body.location, req.body.dateTime, req.body.image, req.body.items, req.body.description, req.body.creatorName, req.body.creatorID).catch(e => { console.error(e) }))
+    try {
+        var newEvent = new Event({
+            title: req.body.title,
+            eventLocation: req.body.location,
+            dateTime: req.body.dateTime,
+            image: req.body.image,
+            items: req.body.items.map(item => { return { name: item.charAt(0).toUpperCase() + item.slice(1), available: false } }),
+            description: req.body.description,
+            creatorID: req.body.creatorID,
+            attendees: [{ username: req.body.creatorName, id: req.body.creatorID }]
+        })
+        newEvent.save().then(savedDoc => {
+            if (savedDoc === newEvent) {
+                console.log("Created event: " + req.body.title)
+                res.status(201).send('')
+            }
+        })
+    } catch (e) { console.error(e); res.status(500).json("Could not create event.") }
 })
 
 app.delete("/deleteEvent/:id", async (req, res) => {
-    res.json(await mongoClient.deleteEvent(req.params.id).catch(e => { console.error(e) }))
+    try {
+        await Event.deleteOne({ _id: req.params.id })
+        res.status(204).send('')
+    } catch (e) { console.error(e); res.status(500).json("Could not delete event.") }
 })
-
-class MongoClient {
-
-    async start() {
-        await mongoose.connect('mongodb+srv://khaledjalloul:Kj542533@cluster0.qpcmz.mongodb.net/eventPlanner?retryWrites=true&w=majority');
-
-        this.EventSchema = new mongoose.Schema({
-            title: String,
-            eventLocation: String,
-            dateTime: Date,
-            image: String,
-            attendees: [{ username: String, id: String }],
-            creatorID: String,
-            description: String,
-            items: [{ name: String, available: Boolean }]
-        }, { collection: 'events' });
-        this.Event = mongoose.model('Event', this.EventSchema);
-    }
-
-    async getEvents(userID) {
-        try {
-            const events = await this.Event.find({})
-            const userEvents = events.filter(event => event.attendees.some(attendee => attendee.id === userID))
-            return { success: true, events: userEvents }
-        } catch (e) { console.log(e); }
-    }
-
-    async getEvent(id) {
-        try {
-            const doc = await this.Event.findById(mongoose.Types.ObjectId(id))
-            if (doc) return { success: true, event: doc }
-            else return { success: false, message: 'Event not found.' }
-        } catch (e) {
-            if (e instanceof TypeError) return { success: false, message: 'Invalid event ID.' }
-            else console.log(e)
-        }
-    }
-
-    async attendEvent(id, username, userID) {
-        try {
-            const doc = await this.Event.findById(id)
-            doc.attendees.push({ username: username, id: userID })
-            return await doc.save().then(savedDoc => {
-                if (savedDoc === doc) {
-                    console.log("Updated users of document " + id)
-                    return { success: true, attendees: doc.attendees }
-                }
-            })
-        } catch (e) { console.log(e) }
-    }
-
-    async unAttendEvent(id, userID) {
-        try {
-            const doc = await this.Event.findById(id)
-            doc.attendees = doc.attendees.filter(attendee => attendee.id !== userID)
-            return await doc.save().then(savedDoc => {
-                if (savedDoc === doc) {
-                    console.log("Updated users of document " + id)
-                    return { success: true, attendees: doc.attendees }
-                }
-            })
-        } catch (e) { console.log(e) }
-    }
-
-    async checkItem(id, reqItem, available) {
-        try {
-            const doc = await this.Event.findOne({ _id: id })
-            doc.items.map(item => {
-                if (item.name === reqItem) {
-                    item.available = available;
-                    return item
-                } else return item
-            })
-            return await doc.save().then(savedDoc => {
-                if (savedDoc === doc) {
-                    console.log("Updated items of document " + id)
-                    return { success: true, items: doc.items }
-                }
-            })
-        } catch (e) { console.log(e) }
-    }
-
-    async createEvent(title, location, dateTime, image, items, description, creatorName, creatorID) {
-        try {
-            var newEvent = new this.Event({
-                title: title,
-                eventLocation: location,
-                dateTime: dateTime,
-                image: image,
-                items: items.map(item => { return { name: item.charAt(0).toUpperCase() + item.slice(1), available: false } }),
-                description: description,
-                creatorID: creatorID,
-                attendees: [{ username: creatorName, id: creatorID }]
-            })
-            return await newEvent.save().then(savedDoc => {
-                if (savedDoc === newEvent) {
-                    console.log("Created event: " + title)
-                    return { success: true }
-                }
-            })
-        } catch (e) { console.log(e); return { success: false } }
-    }
-
-    async deleteEvent(id) {
-        try {
-            await this.Event.deleteOne({ _id: id })
-            return { success: true }
-        } catch (e) { console.error(e); }
-    }
-}
